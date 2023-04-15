@@ -1,17 +1,17 @@
-import com.github.kotlintelegrambot.Bot
 import com.github.kotlintelegrambot.bot
 import com.github.kotlintelegrambot.dispatch
+import com.github.kotlintelegrambot.dispatcher.Dispatcher
 import com.github.kotlintelegrambot.dispatcher.message
 import com.github.kotlintelegrambot.entities.ChatId
 import com.github.kotlintelegrambot.entities.TelegramFile
 import com.github.kotlintelegrambot.extensions.filters.Filter
 import com.github.kotlintelegrambot.network.fold
 import com.rabbitmq.client.ConnectionFactory
+import io.github.cdimascio.dotenv.dotenv
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import io.github.cdimascio.dotenv.dotenv
 
 
 val dotenv = dotenv()
@@ -51,9 +51,9 @@ data class ImgGeneratedEvent(
     val messageId: Long
 )
 
+const val DEFAULT_EXCHANGE = "tgsd"
+
 fun main() {
-    val startMsgFilter = Filter.Custom { text?.startsWith("/start") ?: false }
-    val promptMsgFilter = Filter.Text
 
     val connectionFactory = ConnectionFactory()
 
@@ -66,7 +66,7 @@ fun main() {
     }
 
     val rabbit = Rabbit(
-        exchangeName = "tgsd",
+        exchangeName = DEFAULT_EXCHANGE,
         connectionFactory = connectionFactory,
     )
 
@@ -77,32 +77,9 @@ fun main() {
     val bot = bot {
         token = BOT_TOKEN
         dispatch {
-            message(startMsgFilter) {
-                bot.sendMessage(ChatId.fromId(message.chat.id), text = startMsg)
-                    .fold {
-                            err -> println("Error: $err")
-                    }
-            }
-            message(promptMsgFilter) {
-                val event = Txt2ImgEvent(
-                    message.text!!,
-                    message.chat.id,
-                    message.messageId
-                )
-
-                message.replyToMessage?.let {
-                    return@message
-                }
-
-                rabbit.sendToQueue(Rabbit.Queue.TXT2IMG, Json.encodeToString(event))
-                bot.sendMessage(ChatId.fromId(message.chat.id), text = addedToQueue)
-                    .fold {
-                            err -> println("Error: $err")
-                    }
-            }
+            startMessage()
+            promptMessage(rabbit)
         }
-
-
     }
 
     rabbit.listenToQueue(Rabbit.Queue.IMG) {
@@ -115,4 +92,33 @@ fun main() {
     }
 
     bot.startPolling()
+}
+
+fun Dispatcher.startMessage() {
+    val startMsgFilter = Filter.Custom { text?.startsWith("/start") ?: false }
+
+    message(startMsgFilter) {
+        bot.sendMessage(ChatId.fromId(message.chat.id), text = startMsg)
+            .fold { err -> println("Error: $err") }
+    }
+}
+
+fun Dispatcher.promptMessage(rabbit: Rabbit) {
+    val promptMsgFilter = Filter.Text
+
+    message(promptMsgFilter) {
+        val event = Txt2ImgEvent(
+            message.text!!,
+            message.chat.id,
+            message.messageId
+        )
+
+        message.replyToMessage?.let {
+            return@message
+        }
+
+        rabbit.sendToQueue(Rabbit.Queue.TXT2IMG, Json.encodeToString(event))
+        bot.sendMessage(ChatId.fromId(message.chat.id), text = addedToQueue)
+            .fold { err -> println("Error: $err") }
+    }
 }
