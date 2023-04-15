@@ -5,6 +5,7 @@ import com.github.kotlintelegrambot.dispatcher.message
 import com.github.kotlintelegrambot.entities.ChatId
 import com.github.kotlintelegrambot.entities.TelegramFile
 import com.github.kotlintelegrambot.extensions.filters.Filter
+import com.github.kotlintelegrambot.network.ResponseError
 import com.github.kotlintelegrambot.network.fold
 import com.rabbitmq.client.ConnectionFactory
 import io.github.cdimascio.dotenv.dotenv
@@ -17,10 +18,7 @@ import kotlinx.serialization.json.Json
 val dotenv = dotenv()
 
 val BOT_TOKEN = dotenv["BOT_TOKEN"] ?: throw Exception("BOT_TOKEN not found")
-val RABBIT_HOST = dotenv["RABBIT_HOST"] ?: "localhost"
-val RABBIT_PORT = dotenv["RABBIT_PORT"]?.toInt() ?: 5672
-val RABBIT_USER = dotenv["RABBIT_USER"] ?: "admin"
-val RABBIT_PASS = dotenv["RABBIT_PASS"] ?: "admin"
+val AMPS_URL = dotenv["AMPS_URL"] ?: throw Exception("AMPS_URL not found")
 
 
 // TODO: localize this
@@ -58,11 +56,8 @@ fun main() {
     val connectionFactory = ConnectionFactory()
 
     with (connectionFactory) {
-        host = RABBIT_HOST
-        port = RABBIT_PORT
-        virtualHost = "/"
-        password = RABBIT_PASS
-        username = RABBIT_USER
+        setUri(AMPS_URL)
+        useSslProtocol()
     }
 
     val rabbit = Rabbit(
@@ -88,7 +83,7 @@ fun main() {
             ChatId.fromId(event.chatId),
             TelegramFile.ByUrl(event.key),
             replyToMessageId = event.messageId
-        ).fold { err -> println("Error: $err") }
+        ).fold { err -> println("Error: ${err.string()}") }
     }
 
     bot.startPolling()
@@ -99,7 +94,7 @@ fun Dispatcher.startMessage() {
 
     message(startMsgFilter) {
         bot.sendMessage(ChatId.fromId(message.chat.id), text = startMsg)
-            .fold { err -> println("Error: $err") }
+            .fold { err -> println("Error: ${err.string()}") }
     }
 }
 
@@ -107,18 +102,21 @@ fun Dispatcher.promptMessage(rabbit: Rabbit) {
     val promptMsgFilter = Filter.Text
 
     message(promptMsgFilter) {
+
+        message.replyToMessage?.let { return@message }
+
         val event = Txt2ImgEvent(
             message.text!!,
             message.chat.id,
             message.messageId
         )
 
-        message.replyToMessage?.let {
-            return@message
-        }
-
         rabbit.sendToQueue(Rabbit.Queue.TXT2IMG, Json.encodeToString(event))
         bot.sendMessage(ChatId.fromId(message.chat.id), text = addedToQueue)
-            .fold { err -> println("Error: $err") }
+            .fold { err -> println("Error: ${err.string()}") }
     }
+}
+
+fun ResponseError.string(): String? {
+    return errorBody?.string()
 }
