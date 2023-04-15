@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "worker"
+version = "0.0.1"
+description = ""
+authors = ["Nikita Pivkin <nikita.pivkin@smartforce.io>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+pika = "^1.3.1"
+minio = "^7.1.14"
+diffusers = {extras = ["torch"], version = "^0.15.0"}
+python-dotenv = "^1.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

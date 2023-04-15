@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.8.9-management
+    container_name: rabbitmq
+    hostname: rabbitmq
+    ports:
+      - '5672'
+      - '15672'
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - rabbitmq_log:/var/log/rabbitmq
+      - rabbitmq_etc:/etc/rabbitmq
+
+volumes:
+  rabbitmq_data:
+  rabbitmq_log:
+  rabbitmq_etc:
+
