@@ -15,7 +15,17 @@ from pika.adapters.blocking_connection import BlockingChannel
 
 load_dotenv()
 
-BUCKET_NAME = "images"
+
+def ger_env_or_throw(key):
+    val = os.getenv(key)
+    if not val:
+        raise Exception(f"{key} not found")
+    return val
+
+
+BUCKET_NAME = ger_env_or_throw("AWS_BUCKET")
+AMQP_URL = ger_env_or_throw("AMQP_URL")
+
 DEFAULT_EXCHANGE_NAME = "tgsd"
 TEXT_2_IMG_QUEUE = "txt2img"
 IMG_QUEUE = "img"
@@ -27,9 +37,11 @@ if not torch.cuda.is_available():
 MODEL_NAME = "stabilityai/stable-diffusion-2-base"
 
 minio_client = Minio(
-    os.getenv("MINIO_ENDPOINT", "http://localhost:9001"),
-    access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
-    secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin")
+    os.getenv("AWS_ENDPOINT", "127.0.0.1:9000"),
+    access_key=os.getenv("AWS_ACCESS_KEY", "minioadmin"),
+    secret_key=os.getenv("AWS_SECRET_KEY", "minioadmin"),
+    region=os.getenv("AWS_REGION", "eu-north-1"),
+    secure=True
 )
 
 found = minio_client.bucket_exists(BUCKET_NAME)
@@ -41,6 +53,7 @@ else:
 pipeline = StableDiffusionPipeline.from_pretrained(MODEL_NAME, torch_dtype=torch.float16, revision="fp16")
 pipeline.scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
 pipeline.to("cuda")
+print("pipline created")
 
 Txt2ImgEvent = TypedDict(
     "Txt2ImgEvent", {
@@ -63,7 +76,7 @@ def save_img(name: str, img: io.BytesIO):
     minio_client.put_object(
         bucket_name=BUCKET_NAME,
         object_name=name,
-        data=img, length=-1
+        data=img, length=img.getbuffer().nbytes
     )
 
 
@@ -79,17 +92,19 @@ def save_img_and_get_url(name: str, img: io.BytesIO) -> str:
 
 
 def generate_img(prompt: str) -> io.BytesIO:
-    images: List[Image.Image] = pipeline(prompt, num_inference_steps=25)
+    images: List[Image.Image] = pipeline(prompt, num_inference_steps=25).images
     return img_to_readable(images[0])
 
 
 def img_to_readable(img: Image.Image) -> io.BytesIO:
     byte_io = io.BytesIO()
-    img.save(byte_io)
+    img.save(byte_io, format="PNG")
+    # TODO use getvalue?
+    byte_io.seek(0)
     return byte_io
 
 
-def txt2imgCallback(
+def txt2img_callback(
         ch: BlockingChannel,
         method: pika.spec.Basic.Deliver,
         properties: pika.spec.BasicProperties,
@@ -100,7 +115,7 @@ def txt2imgCallback(
 
     # Start generate img
     img = generate_img(prompt)
-    img_name = f"/txt2img/{hash(prompt)}"
+    img_name = f"/txt2img/{hash(prompt)}.png"
 
     img_url = save_img_and_get_url(img_name, img)
 
@@ -121,19 +136,11 @@ def txt2imgCallback(
 
 
 def main():
-    params = pika.ConnectionParameters(
-        host=os.getenv("RABBITMQ_HOST", 'localhost'),
-        virtual_host=os.getenv("RABBITMQ_VIRTUAL_HOST", "/"),
-        port=os.getenv("RABBITMQ_PORT", 5672),
-        credentials=pika.credentials.PlainCredentials(
-            username=os.getenv("RABBITMQ_USERNAME", "admin"),
-            password=os.getenv("RABBITMQ_PASSWORD", "admin")
-        )
-    )
+    params = pika.URLParameters(AMQP_URL)
 
     with pika.BlockingConnection(params) as conn:
         with conn.channel() as channel:
-            channel.basic_consume(TEXT_2_IMG_QUEUE, txt2imgCallback)
+            channel.basic_consume(TEXT_2_IMG_QUEUE, txt2img_callback)
             channel.start_consuming()
 
 
